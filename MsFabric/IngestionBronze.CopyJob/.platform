@@ -1,11 +1,11 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
   "metadata": {
-    "type": "Lakehouse",
-    "displayName": "LakeHouseBronze"
+    "type": "CopyJob",
+    "displayName": "IngestionBronze"
   },
   "config": {
     "version": "2.0",
-    "logicalId": "901cf25a-456d-bbae-42fe-66d500879f07"
+    "logicalId": "756c67df-81e7-a071-4727-272c158771e2"
   }
 }
