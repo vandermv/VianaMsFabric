@@ -22,6 +22,8 @@
 
 # CELL ********************
 
+# Import required Spark and Delta Lake libraries
+
 from pyspark.sql.functions import *
 from delta.tables import DeltaTable
 
@@ -33,6 +35,8 @@ from delta.tables import DeltaTable
 # META }
 
 # CELL ********************
+
+# Define Bronze and Silver locations and watermark table
 
 bronze_root = "Files/bronze/adventureworks"
 silver_schema = "silver"
@@ -47,12 +51,14 @@ watermark_table = "metadata.watermark"
 
 # CELL ********************
 
+# Automatically discover all Bronze tables by scanning the filesystem
+
 tables = [
-    f.name.lower() for f in mssparkutils.fs.ls(bronze_root)
+    f.name for f in mssparkutils.fs.ls(bronze_root)
     if f.isDir
 ]
 
-print(tables)
+print("Discovered tables:", tables)
 
 # METADATA ********************
 
@@ -63,10 +69,12 @@ print(tables)
 
 # CELL ********************
 
+# Create metadata schema and watermark control table if they do not exist
+
 spark.sql("CREATE SCHEMA IF NOT EXISTS metadata")
 
-spark.sql("""
-CREATE TABLE IF NOT EXISTS metadata.watermark (
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {watermark_table} (
     table_name STRING,
     last_load TIMESTAMP
 )
@@ -81,6 +89,8 @@ USING DELTA
 # META }
 
 # CELL ********************
+
+# Function to retrieve the last processed timestamp (watermark)
 
 def get_watermark(table):
 
@@ -106,6 +116,8 @@ def get_watermark(table):
 
 # CELL ********************
 
+# Function to update watermark after successful processing
+
 def update_watermark(table):
 
     spark.sql(f"""
@@ -128,29 +140,82 @@ def update_watermark(table):
 
 # CELL ********************
 
-tables = [
-    f.name for f in mssparkutils.fs.ls(bronze_root)
-    if f.isDir
-]
+# Process Bronze tables and load them incrementally into Silver using Delta MERGE
+# This step reads Bronze data, removes duplicates, and applies CDC logic
+
+from pyspark.sql.window import Window
+from pyspark.sql.functions import row_number
 
 for table in tables:
 
-    print(f"Processing {table}")
+    print(f"Processing table: {table}")
 
     bronze_path = f"{bronze_root}/{table}"
+    silver_table = f"{silver_schema}.{table.lower()}"
 
+    # Read Bronze data recursively to include all partitions
     df = spark.read.format("parquet") \
         .option("recursiveFileLookup","true") \
         .load(bronze_path)
 
+    # Add metadata column to track ingestion time
     df = df.withColumn("load_timestamp", current_timestamp())
 
-    silver_table = f"{silver_schema}.{table.lower()}"
+    # Identify primary key (temporary strategy: first column)
+    key = df.columns[0]
 
-    df.write.format("delta") \
-        .mode("overwrite") \
-        .option("mergeSchema","true") \
-        .saveAsTable(silver_table)
+    # Deduplicate source records to prevent multiple matches during MERGE
+    window = Window.partitionBy(key).orderBy(col("load_timestamp").desc())
+
+    df = df.withColumn(
+        "rn",
+        row_number().over(window)
+    ).filter("rn = 1").drop("rn")
+
+    # If Silver table does not exist, create it
+    if not spark.catalog.tableExists(silver_table):
+
+        print("Creating new Silver table")
+
+        df.write.format("delta") \
+          .mode("overwrite") \
+          .option("mergeSchema","true") \
+          .saveAsTable(silver_table)
+
+    else:
+
+        print("Running CDC MERGE")
+
+        deltaTable = DeltaTable.forName(spark, silver_table)
+
+        (
+            deltaTable.alias("target")
+            .merge(
+                df.alias("source"),
+                f"target.{key} = source.{key}"
+            )
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .execute()
+        )
+
+    # Update watermark after successful load
+    update_watermark(table)
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# CELL ********************
+
+# Optimize Delta tables to improve query performance
+
+for table in tables:
+
+    spark.sql(f"OPTIMIZE {silver_schema}.{table.lower()}")
 
 # METADATA ********************
 

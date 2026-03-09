@@ -102,7 +102,10 @@
                     "typeProperties": {
                       "location": {
                         "type": "LakehouseLocation",
-                        "folderPath": "@{concat( 'bronze/adventureworks/', item().TABLE_NAME, '/', formatDateTime(utcNow(),'yyyy/MM/dd') )}",
+                        "folderPath": {
+                          "value": "@{concat( 'bronze/adventureworks/', item().TABLE_NAME, '/', formatDateTime(utcNow(),'yyyy/MM/dd') )}",
+                          "type": "Expression"
+                        },
                         "fileName": {
                           "value": "@{concat(item().TABLE_NAME,'_',formatDateTime(utcNow(),'yyyyMMddHHmmss'),'.parquet')}",
                           "type": "Expression"
